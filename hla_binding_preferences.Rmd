@@ -1,0 +1,1235 @@
+---
+title: "HLA presentation preferences"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(data.table)
+library(limma) #bioc
+library(topGO)
+library(org.Hs.eg.db) #bioc
+library(ontologyIndex)
+library(ggbeeswarm)
+library(ggplot2)
+library(Biostrings) #bioc
+library(ggrepel)
+library(circlize)
+library(multipanelfigure)
+library(ggsci)
+library(latex2exp)
+library(ggdist)
+library(ggpubr)
+library(ComplexHeatmap)
+select = dplyr::select
+```
+
+## 1. HLA ligand-enriched genes and their GO analysis
+
+### Load and preprocess binding predictions
+
+Read in netMHCpan binders (WB & SB)
+
+>TODO cleanup
+
+```{r}
+data.pred.full <- fread("zcat data/human_proteome_netmhcpan_summary.txt.gz")
+
+data.pred.full %>%
+  group_by(hla, ligand.len) %>%
+  summarize(count = sum(count)) %>%
+  arrange(-count) %>%# View() 
+  head()
+```
+
+Select data for pilot analysis
+
+```{r}
+data.pred.full %>%
+  filter(ligand.len == 9, hla %in% c("HLA-A1101", "HLA-A0201", 
+                                     "HLA-A0101", "HLA-A0301", 
+                                     "HLA-B0702", "HLA-B2705",
+                                     "HLA-B0801", "HLA-B5701", # HIV
+                                     #"HLA-B2709", "HLA-B3801", # 
+                                     "HLA-C0702", "HLA-C1502", # SARS
+                                     "HLA-C0202", "HLA-C0801")) -> data.pred.sel
+
+data.pred.sel  %>%
+  group_by(hla) %>%
+  summarize(count = sum(count)) %>%
+  arrange(-count)
+```
+
+Get protein lengths and Entrez IDs
+
+```{r}
+read_prot <- function(fname) {
+  prots <- readAAStringSet(fname) %>%
+    as.character
+  tibble(uniprot.id2 = str_split_fixed(names(prots), "[\\| ]", 4)[,3],
+         seq = prots) %>%
+    mutate(name = str_split_fixed(uniprot.id2, "_", 2)[,1])
+}
+
+human_prots <- readAAStringSet("data/UP000005640_9606.fasta") %>%
+  as.character
+
+# ! this provides uniprot <> entrez conversions
+meta.prot <- data.table(uniprot.id2 = str_split_fixed(names(human_prots), "[\\| ]", 4)[,3],
+                        protein.len = nchar(human_prots)) %>%
+  mutate(name = str_split_fixed(uniprot.id2, "_", 2)[,1]) %>%
+  merge(fread("data/uniprot_to_entrez.txt"))
+```
+
+Compute base statistics - observed and expected number of presented peptides per gene. Expected number is an average across a given HLA
+
+```{r}
+data.pred.sel.s <- data.pred.sel %>%
+  as.data.frame %>%
+  merge(meta.prot) %>%
+  group_by(hla) %>%
+  mutate(P0 = sum(count) / sum(protein.len - ligand.len)) %>%
+  ungroup %>%
+  rowwise() %>%
+  mutate(odds = log2((count + 1) / (protein.len + 1 - ligand.len) / P0),
+         p.value = binom.test(count + 1, protein.len + 1 - ligand.len, 
+                              p = P0, alternative = "two.sided")$p.value) %>%
+  group_by(hla) %>%
+  mutate(p.value.adj = p.adjust(p.value, method = "BH")) %>%
+  ungroup
+```
+
+### Human proteins enriched and depleted in HLA ligands
+
+```{r}
+data.pred.sel.s <- data.pred.sel.s %>%
+  mutate(hla.gene = substr(hla, 5, 5),
+         sel = ifelse(odds >= 1 & p.value.adj < 0.05, 1, 
+                      ifelse(odds <= -1 & p.value.adj < 0.05, -1,
+                             0)),
+         protein.len.q = cut(protein.len, quantile(protein.len)))
+```
+
+Plot over- and under-represented proteins according to HLA ligand frequency
+
+```{r Fig2a, fig.width = 6, fig.height = 10}
+excl_for_now <- c(
+  "HLA-A0301","HLA-A0101",
+  "HLA-B5701", "HLA-B0801", 
+  "HLA-C0801", "HLA-C0702")
+
+hla_incl_vert <- c("HLA-A0201", "HLA-A1101", 
+                   "HLA-B0702", "HLA-B2705", 
+                   "HLA-C0202", "HLA-C1502")
+
+hla_incl <- c("HLA-A0201", "HLA-B0702", "HLA-C0202",
+              "HLA-A1101", "HLA-B2705", "HLA-C1502")
+
+pfig2a <- data.pred.sel.s %>%
+  filter(!(hla %in% excl_for_now)) %>%
+  mutate(hla = factor(hla, levels = hla_incl_vert)) %>%
+  ggplot(aes(x = odds, y = pmin(-log10(p.value), 20), size = count,
+             color = sel %>% as.factor())) +
+  geom_point() +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  #geom_hline(yintercept = 3, linetype = "dashed", color = "grey") +
+  scale_size_continuous("Number of\npeptides", breaks = c(1, 10, 100, 1000)) +
+  scale_color_manual("Ligand -", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted", "No change", "Enriched")) +
+  scale_x_continuous(TeX("$log_{2}\\,\\left[\\frac{ligands_{obs}}{ligands_{exp}}\\right]$"), limits = c(-5, 5)) +
+  ylab(TeX("$-log_{10}\\~Pvalue_{adj}$")) +
+  facet_wrap(~hla, ncol = 2) + #facet_wrap(~hla, nrow = 2) +
+  theme_pubclean() + 
+  theme(legend.position = "bottom", 
+        legend.box = "vertical")
+pfig2a
+```
+
+```{r TableS1}
+data.pred.sel.s %>%
+  filter(sel == 1) %>%
+  group_by(hla) %>%
+  summarize(enriched.genes = length(unique(entrez.id))) %>%
+  merge(data.pred.sel.s %>%
+          filter(sel == -1) %>%
+    group_by(hla) %>%
+          summarize(depleted.genes = length(unique(entrez.id)))) %>%
+  merge(data.pred.sel %>%
+          group_by(hla) %>%
+          summarize(ligand.count = sum(count)) ) %>%
+  arrange(hla)
+```
+
+### Presentation preferences based on source human protein length
+
+```{r}
+data.pred.sel.s.len <- data.pred.sel.s %>%
+  filter(!(hla %in% excl_for_now)) %>%
+  group_by(hla, sel, protein.len.q) %>%
+  summarize(count = n()) %>%
+  group_by(hla, sel) %>%
+  mutate(total = sum(count)) %>%
+  mutate(p = count / total)
+```
+
+```{r FigS1}
+data.pred.sel.s.len %>%
+  merge(expand.grid(hla = data.pred.sel.s.len$hla %>% unique, 
+                    sel = data.pred.sel.s.len$sel %>% unique,
+                    protein.len.q = data.pred.sel.s.len$protein.len.q %>% unique), all = T) %>%
+  mutate(p = ifelse(is.na(p), 0, p)) %>%
+  mutate(hla = factor(hla, levels = hla_incl)) %>%
+  ggplot(aes(x = protein.len.q %>% as.integer, 
+             y = p,
+             fill = sel %>% as.factor,
+             color = sel %>% as.factor)) +
+  geom_errorbar(aes(ymin = p, ymax = p + sqrt(p * (1-p) / total)),
+                position = "dodge") +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual("", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted","No change","Enriched")) +
+  scale_color_manual("", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted","No change","Enriched")) +
+  xlab("Protein length quartile") + ylab("Fraction of proteins") +
+  facet_wrap(~hla, nrow = 2) +
+  theme_pubclean() + 
+  theme(aspect = 1, legend.position = "bottom")
+```
+
+### Re-check length & GO enrichment results for netMHCpan predictions using mhcflurry predictions
+
+**VADIM**
+
+> TODO Repeat "Length preference" and "Proteins enriched and depleted in ligands" figures for data/mhcflurry_preditions_human_proteome.csv.gz... with a <=2% affinity_percentile cutoff. see if they are the same that for NetMHCPan
+
+### GO analysis
+
+http://web.mit.edu/~r/current/arch/i386_linux26/lib/R/library/limma/html/goana.html
+
+```{r}
+get_annots <- function(.set1, .set2 = meta.prot$entrez.id,
+                       .threshold = 0.01, .fun = goana) {
+  .set1 <- .set1 %>% unique
+  .set2 <- c(.set1, .set2) %>% unique
+  .fun(.set1, universe = .set2, 
+       FDR = 1.01) %>% # we'll do our own FDR filtering
+    add_rownames("Term.ID") %>%
+    mutate(total.N = length(.set2),
+           total.DE = length(.set1),
+           fold = log2(DE / total.DE / N * total.N),
+           P.DE.adj = p.adjust(P.DE, method = "BH")) %>%
+    filter(P.DE.adj < .threshold) %>% 
+    arrange(P.DE, -fold)
+}
+
+get_annots1 <- function(.sel, .hla, data = data.pred.sel.s, 
+                        .threshold = 0.01, .fun = goana) {
+  get_annots(data %>% filter(hla == .hla, sel == .sel) %>% .$entrez.id, 
+             data %>% filter(hla == .hla, sel == 0) %>% .$entrez.id,
+             .threshold, .fun) %>%
+    mutate(hla = .hla, sel = .sel)
+}
+
+data.pred.sel.s %>%
+  select(hla, sel) %>%
+  unique %>%
+  filter(sel != 0) %>%
+  group_by(sel, hla) %>%
+  group_modify(~ get_annots(filter(data.pred.sel.s, hla == .y$hla, sel == .y$sel)$entrez.id,
+                            filter(data.pred.sel.s, hla == .y$hla, sel == 0)$entrez.id)) -> go.enr.1
+```
+
+```{r Fig2b, fig.height=14, fig.width=10}
+trunc_str <- function(x, len = 6) { 
+strsplit(x, " ") %>%
+  lapply(function(xx) {
+    if(length(xx) >= len) {
+      xx[len] <- "..."
+      return(paste0(xx[1:len], collapse = " "))
+      }
+    return(paste0(xx, collapse = " "))
+  }) %>% unlist
+}
+
+go.top.1 <- go.enr.1 %>%
+  group_by(sel, hla) %>%
+  filter(rank(P.DE.adj) <= 20) %>%
+  .$Term.ID %>% unique
+
+pfig2b <- go.enr.1 %>%
+  filter(!(hla %in% excl_for_now),
+         Term.ID %in% go.top.1) %>%
+  mutate(Term = trunc_str(Term, 4),
+         direction = ifelse(sel > 0, "enriched", "depleted")) %>%
+  ggplot(aes(x = factor(hla, levels = hla_incl_vert),
+             y = fct_reorder2(paste(Ont, Term), fold, paste(sel, hla)))) +
+  geom_quasirandom(aes(size = fold, fill = direction), shape = 21, width = 0.2) + 
+  #geom_text(aes(label = paste0(round(100 * DE / total.DE, 0), "%"))) +
+  scale_y_discrete("", position = "right") + 
+  #scale_x_discrete("", position = "top") + 
+  xlab("") +
+  scale_fill_manual("HLA ligand -", values = c("#56b4df", "#e69d00")) +
+  #scale_color_distiller("-log10 Padj", palette = "Reds", direction = 1) +
+  scale_size_continuous("GO term enrinchment\nfold, log2", breaks = c(1, 2 ,4)) +
+  theme_pubclean() +
+  theme(legend.position = "bottom", 
+        legend.box = "vertical",
+        axis.text.x = element_text(angle = 90, vjust = 0.5),
+        axis.text.y = element_text(family = "mono", size = 8))
+pfig2b
+```
+
+```{r Fig2}
+pdf("Fig2.pdf", height = 14, width = 14)
+figure <- multi_panel_figure(columns = 14, rows = 12)
+(figure %<>% fill_panel(pfig2a, row = 1:11, column = 1:6))
+(figure %<>% fill_panel(pfig2b, row = 1:12, column = 7:14))
+dev.off()
+```
+
+### Re-check GO differences with DAVID
+
+**VADIM**
+
+> Todo - repeat the plot above using [DAVID](https://david.ncifcrf.gov/summary.jsp) -- perhaps need VPN as Russia seems to be blocked.
+> (Step 1) Paste list of either sel == 1 (enriched in ligands) or sel == -1 (depleted in ligands), (Step 2) select Entrez ID, (Step 3) select "(x) gene list", click "Submit list", select "Homo Sapiens" in select species
+> Then repeat the same steps for sel == 0 (unenriched) and select "(x) Background"
+> Proceed by clicking "Functional Annotation Clustering"
+> Get a screenshot for top 2-3 GO category clusters
+> Repeat for all cases in figure aboce
+
+```{r}
+data.pred.sel.s %>%
+  filter(hla == "HLA-A0201", sel == 1) %>%
+  select(entrez.id) %>% 
+  head # fwrite("HLA-A0201_enr.txt")
+
+data.pred.sel.s %>%
+  filter(hla == "HLA-A0201", sel == 0) %>%
+  select(entrez.id) %>%
+  head # fwrite("HLA-A0201_bg.txt")
+
+data.pred.sel.s %>%
+  filter(hla == "HLA-A0201", sel == -1) %>%
+  select(entrez.id) %>%
+  head # fwrite("HLA-A0201_depl.txt")
+```
+
+### Re-check GO differences with Seph data 
+
+**VADIM**
+> TODO: repeat the same with data/seph_hla_ligands.txt
+> Under the same I mean compare A02 and A11 GO categories between two gene sets
+> Note that no need to find genes enriched/depleted in ligands here (no sel==1/sel==-1), just use entire lists for GO expression
+> use meta.prot dataframe to convert naming
+
+```{r}
+data.seph <- fread("data/seph_hla_ligands.txt") %>%
+  merge(meta.prot, by = "uniprot.id")
+
+data.seph.ann <- data.seph %>%
+  group_by(hla, ligand.len) %>%
+  group_modify(~get_annots(.x$entrez.id, .threshold = 1.01))
+```
+
+```{r}
+go.enr.1 %>%
+  filter(hla %in% c("HLA-A0201", "HLA-A1101"),
+         sel == 1) %>%
+  group_by(hla) %>%
+  filter(rank(P.DE.adj) <= 20) %>%
+  mutate(fold.orig = fold, P.DE.adj.orig = P.DE.adj,
+         hla.orig = hla) %>%
+  ungroup %>%
+  select(Term.ID, Ont, Term, fold.orig, P.DE.adj.orig, hla.orig) %>%
+  unique %>%
+  merge(data.seph.ann) -> data.seph.ann.sel
+
+p.exp.a11 <- data.seph.ann.sel %>%
+  filter(Ont == "CC", ligand.len == 9) %>%
+  mutate(hla.orig = paste0(hla.orig, "-assoc. GO"),
+         p = DE / total.DE, psd = sqrt(p * (1 - p) / total.DE)) %>%
+  arrange(p) %>%
+  #filter(Ont == "CC", Term == "ribosome" | Term == "membrane" | Term == "nucleosome") %>%
+  ggplot(aes(x = fct_reorder(Term, DE / total.DE), 
+             y = p, color = hla)) +
+  geom_pointrange(aes(ymin = p - psd, ymax = p + psd), width = 0.2) +
+  geom_line(aes(group = hla)) +
+  scale_color_manual(name = "Experimental\nligandome", values = c("#dfc27d", "#80cdc1")) +
+  facet_wrap(~hla.orig, scales = "free") +
+  xlab("") + ylab("Fraction of presented proteins") +
+  theme_pubr() +
+  theme(legend.position = c(0.1, 0.7),
+        axis.text.x = element_text(angle = -45, vjust = 0.5, hjust = 0))
+p.exp.a11
+```
+
+---
+
+## 2. Human proteins are differentially presented by HLA ligands of different lengths
+
+### An example A11
+
+A0101 - bias in depleted genes for 
+B0702 - another example, with bias in depleted/enriched
+A0201 - no effect
+B0801 - no effect
+B2701 - no effect
+
+```{r}
+data.pred.len <- data.pred.full %>% # note some duplicates due to entrez id
+  filter(hla == "HLA-A1101") %>%
+  merge(meta.prot, by = "uniprot.id") %>%
+  group_by(hla, ligand.len) %>%
+  mutate(P0 = sum(count) / sum(protein.len - ligand.len)) %>%
+  ungroup %>%
+  rowwise() %>%
+  mutate(odds = log2((count + 1) / (protein.len + 1 - ligand.len) / P0),
+         p.value = binom.test(count + 1, protein.len + 1 - ligand.len, 
+                              p = P0, alternative = "two.sided")$p.value) %>%
+  group_by(hla, ligand.len) %>%
+  mutate(p.value.adj = p.adjust(p.value, method = "BH")) %>%
+  ungroup
+
+data.pred.len <- data.pred.len %>%
+  mutate(hla.gene = substr(hla, 5, 5),
+         sel = ifelse(odds >= 1 & p.value.adj < 0.05, 1, 
+                      ifelse(odds <= -1 & p.value.adj < 0.05, -1,
+                             0)),
+         protein.len.q = cut(protein.len, quantile(protein.len)))
+```
+
+```{r}
+data.pred.len %>%
+  filter(sel == 1) %>%
+  group_by(hla, ligand.len) %>%
+  summarize(enriched.genes = length(unique(entrez.id))) %>%
+  merge(data.pred.len %>%
+          filter(sel == -1) %>%
+          group_by(hla, ligand.len) %>%
+          summarize(depleted.genes = length(unique(entrez.id)))) %>%
+  merge(data.pred.full %>%
+          filter(hla == "HLA-A1101") %>%
+          group_by(hla, ligand.len) %>%
+          summarize(ligand.count = sum(count)) ) %>%
+  select(-hla) %>%
+  arrange(ligand.len)
+```
+
+```{r}
+data.pred.len %>%
+  ggplot(aes(x = odds, y = pmin(-log10(p.value), 20), size = count,
+             color = sel %>% as.factor())) +
+  geom_point()  +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  #geom_hline(yintercept = 3, linetype = "dashed", color = "grey") +
+  scale_color_manual("", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted", "No change", "Enriched")) +
+  scale_x_continuous(TeX("$log_2 (observed / expected)$"), limits = c(-3, 3)) +
+  ylab(TeX("$-log_{10}(P-value)$")) +
+  scale_size_continuous("Number of\npeptides", breaks = c(1, 10, 100, 1000)) +
+  facet_wrap(~ligand.len, nrow = 2) +
+  theme_pubclean() + 
+  theme(aspect = 1, legend.position = "right")
+
+data.pred.len.plen <- data.pred.len %>%
+  group_by(ligand.len, sel, protein.len.q) %>%
+  summarize(count = n()) %>%
+  group_by(ligand.len, sel) %>%
+  mutate(total = sum(count)) %>%
+  mutate(p = count / total) %>%
+  merge(expand.grid(sel = data.pred.len$sel %>% unique,
+                    ligand.len = data.pred.len$ligand.len %>% unique,
+                    protein.len.q = data.pred.len$protein.len.q %>% unique), all = T) %>%
+  mutate(p = ifelse(is.na(p), 0, p))
+
+data.pred.len.plen %>%
+  ggplot(aes(x = protein.len.q %>% as.integer, 
+             y = count / total,
+             fill = sel %>% as.factor,
+             color = sel %>% as.factor)) +
+  geom_errorbar(aes(ymin = p, ymax = p + sqrt(p * (1-p) / total)),
+                position = "dodge") +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_color_manual("Direction", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted","No change","Enriched")) +
+  scale_fill_manual("Direction", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted","No change","Enriched")) +
+  xlab("Protein length quartile") + ylab("Fraction of peptides") +
+  facet_wrap(~ligand.len, nrow = 2) +
+  theme_minimal()
+
+get_annots2 <- function(.sel, .ligand.len, data = data.pred.len, 
+                        .threshold = 0.01, .fun = goana) {
+  get_annots(data %>% filter(ligand.len == .ligand.len, sel == .sel) %>% .$entrez.id, 
+             data %>% filter(ligand.len == .ligand.len, sel == 0) %>% .$entrez.id,
+             .threshold, .fun) %>%
+    mutate(ligand.len = .ligand.len, sel = .sel)
+}
+
+expand.grid(sel = c(1,-1), ligand.len = data.pred.len$ligand.len %>% unique) %>%
+  rowwise %>%
+  do(get_annots2(.$sel, .$ligand.len)) -> go.enr.len
+
+go.top.len <- go.enr.len %>%
+  group_by(sel, ligand.len) %>%
+  filter(rank(P.DE.adj) <= 20) %>%
+  .$Term.ID %>% unique
+```
+
+````{r fig.height=14, fig.width=10}
+go.enr.len %>%
+  filter(Term.ID %in% go.top.len) %>%
+  mutate(Term = trunc_str(Term),
+         direction = ifelse(sel > 0, "Ligand enriched", "Ligand depleted")) %>%
+  ggplot(aes(x = paste0(ligand.len, "-mer") %>% factor(levels = paste0(8:12, "-mer")),
+             y = fct_reorder2(paste(Ont, Term), fold, paste(sel, ligand.len)))) +
+  geom_quasirandom(aes(size = fold, fill = direction), shape = 21, width = 0.2) + 
+  #geom_point(aes(size = fold, fill = direction), shape = 21) + 
+  #geom_text(aes(label = paste0(round(100 * DE / total.DE, 0), "%"))) +
+  scale_y_discrete("", position = "right") + xlab("") +
+  scale_size_continuous("GO enr. fold (log2)", breaks = c(1, 2 ,4)) +
+  scale_fill_manual("", values = c("#56b4df", "#e69d00")) +
+  #scale_color_distiller("-log10 Padj", palette = "Reds", direction = 1) +
+  #scale_size_continuous(guide = F, breaks = c(1,2,4,6)) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+### Re-check with Seph data 
+**VADIM**
+> TODO: repeat the same with data/seph_hla_ligands.txt
+> Under the same I mean A11 length bias GO analysis
+> Note that no need to find genes enriched/depleted in ligands here, just use entire lists for GO expression
+> use meta.prot dataframe to convert naming
+## Viral peptides and HLA preferences
+
+```{r}
+go.enr.len %>%
+  mutate(hla = "HLA-A1101") %>%
+  filter(sel == 1) %>%
+  filter(Term.ID %in% go.top.len) %>%
+  group_by(Term.ID) %>%
+  mutate(max.fold.len = ligand.len[which(fold == max(fold))]) %>%
+  #group_by(hla, ligand.len) %>%
+  #filter(rank(P.DE.adj) <= 20) %>%
+  mutate(fold.orig = fold, P.DE.adj.orig = P.DE.adj,
+         DE.orig = DE, total.DE.orig = total.DE,
+         ligand.len.orig = ligand.len) %>%
+  ungroup %>%
+  select(Term.ID, Ont, Term,
+         DE.orig, total.DE.orig,
+         fold.orig, P.DE.adj.orig, hla, ligand.len.orig, max.fold.len) %>%
+  unique %>%
+  merge(data.seph.ann) -> data.seph.ann.len
+```
+
+```{r fig.width=7, fig.height=7}
+p.exp.a11.len <- data.seph.ann.len %>%
+  filter(ligand.len == ligand.len.orig) %>%
+  filter(Ont == "CC") %>%
+  mutate(ligand.len = factor(paste0(ligand.len, "-mer"), levels = c("9-mer", "10-mer", "11-mer", "12-mer")),
+         max.fold.len = factor(paste0(max.fold.len, "-mer"), levels = c("9-mer", "10-mer", "11-mer", "12-mer"))) %>%
+  #filter(ligand.len %in% c(10, 11), ligand.len.orig %in% c(10, 11)) %>%
+  ggplot(aes(x = DE.orig / total.DE.orig, y = DE / total.DE)) +
+  #geom_smooth(method = "lm", color = "black", alpha = 0.7, linetype = "dashed") +
+  geom_point(aes(color = max.fold.len %>% as.factor), size = 3) +
+  geom_text_repel(aes(label = Term), seed = 42, force = 5,
+                  #nudge_x = 0.4, 
+                  #nudge_y = 0.01, 
+                  segment.alpha = 0.7) +
+  facet_wrap(~ligand.len, scales = "free") +
+  scale_color_manual(name = "Max enrichment for", values = c("#542788", "#998ec3", "#f1a340")) +
+  scale_x_continuous("Fraction of presented proteins (synthetic)", expand = c(0.1, 0.01)) +
+  scale_y_continuous("Fraction of presented proteins (experimental)", expand = c(0.1, 0.01)) +
+  theme_pubr() +
+  theme(legend.position = "bottom")
+
+p.exp.a11.len
+```
+
+```{r Fig3}
+pdf("Fig3.pdf", height = 12, width = 8)
+figure <- multi_panel_figure(
+  columns = 8,
+  rows = 12)
+(figure %<>% fill_panel(p.exp.a11, row = 1:5, column = 1:8))
+(figure %<>% fill_panel(p.exp.a11.len, row = 6:12, column = 1:8))
+dev.off()
+```
+
+---
+
+## Real displayed proteins from HLA ligand atlas
+
+```{r}
+data.atlas <- fread("data/HLA_peptide_allele_tissue.tsv") %>%
+  merge(fread("HLA_protein_map.tsv"), allow.cartesian = T) %>%
+  select(peptide.seq = peptide_sequence,
+         hla.class = hla_type_class,
+         hla = hla_type_name,
+         uniprot.id = uniprot_id) %>%
+  unique %>%
+  merge(meta.prot, by = "uniprot.id")
+```
+
+```{r}
+data.atlas.ann <- data.atlas %>%
+  group_by(hla.class, hla) %>%
+  do(get_annots(.$entrez.id %>% unique, meta.prot$entrez.id %>% unique))
+```
+
+```{r}
+data.atlas.ann %>%
+  ungroup %>%
+  select(hla, Term.ID, fold) %>%
+  dcast(Term.ID ~ hla, value.var = "fold", fill = 0) -> mat.atlas.ann
+
+rownames(mat.atlas.ann) <- mat.atlas.ann$Term.ID
+mat.atlas.ann$Term.ID <- NULL
+mat.atlas.ann <- as.matrix(mat.atlas.ann)
+
+pca.atlas <- prcomp(mat.atlas.ann, scale. = T)
+
+df.pca.atlas <- pca.atlas$rotation %>% as.matrix %>% as.data.frame
+df.pca.atlas$hla <- rownames(df.pca.atlas)
+df.pca.atlas <- df.pca.atlas %>%
+  mutate(hla.class = ifelse(substr(hla, 1, 1) == "D", "class2", "class1"),
+         hla.gene = ifelse(hla.class == "class1", 
+                           substr(hla, 1, 1),
+                           substr(hla, 1, 2)))
+```
+
+```{r fig.height=8, fig.width=8}
+p3a <- df.pca.atlas %>%
+  ggplot(aes(x = PC1, y = PC2, color = hla.gene)) +
+  geom_density_2d(bins = 4) +
+  geom_point() +
+  geom_text_repel(aes(label = hla), cex = 2.2, color = "black", segment.alpha = 0.3) +
+  theme_minimal() + xlab("PC1") + ylab("PC2") +
+  scale_color_manual("HLA gene", 
+                     values = c("#0071b2", "#56b3e9", "#009e74", "#d55c00", "#cc79a7")) +
+  theme_pubr() +
+  theme(legend.position = "right")
+p3a
+```
+
+Distances between genes
+
+```{r}
+mat.atlas.ann %>% t %>% 
+  dist %>% #(method = "manhattan") %>%
+  as.matrix %>% 
+  melt %>%
+  filter(Var1 != Var2) %>%
+  mutate(gene1 = substr(str_split_fixed(Var1, fixed("*"), 2)[,1], 1, 2),
+         gene2 = substr(str_split_fixed(Var2, fixed("*"), 2)[,1], 1, 2)) -> dist.atlas.ann
+
+p3b <- dist.atlas.ann %>%
+  mutate(value = value / nrow(mat.atlas.ann)) %>%
+  ggplot(aes(x = gene1, y = value)) +
+  geom_violin(aes(fill = gene2, color = gene2), position = position_dodge(width = 0.65)) +
+  geom_boxplot(aes(color = gene2), width = 0.2, position = position_dodge(width = 0.65),
+               outlier.colour = NA) +
+  #geom_text_repel(aes(label = hla), cex = 2.2, color = "black", segment.alpha = 0.3) +
+  theme_minimal() + xlab("") + ylab("Difference between GO enrichment profiles") +
+  scale_fill_manual("HLA gene", 
+                     values = c("#0071b2", "#56b3e9", "#009e74", "#d55c00", "#cc79a7")) +
+  scale_color_manual("HLA gene", 
+                     values = c("#0071b2", "#56b3e9", "#009e74", "#d55c00", "#cc79a7")) +
+  coord_flip() +
+  theme_pubr() +
+  theme(legend.position = "none")
+p3b
+```
+
+```{r}
+df.hla12.go <- pca.atlas$x %>% as.tibble %>%
+  select(PC2)
+df.hla12.go$Term.ID <- rownames(pca.atlas$x)
+df.hla12.go %>%
+  melt %>%
+  group_by(variable) %>%
+  filter(rank(-value, ties.method = "first") <= 10 | rank(value, ties.method = "first") <= 10) %>%
+  merge(data.atlas.ann %>% ungroup %>% select(Term.ID, Ont, Term) %>% unique) -> df.hla12.go.2
+
+p3c <- df.hla12.go.2 %>%
+  mutate(direction = ifelse(value > 0, "More in class II", "More in class I")) %>%
+  ggplot(aes(x = paste(Ont, Term) %>% fct_reorder(value), y = value, 
+             fill = direction, color = direction)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30") +
+  geom_bar(stat = "identity", width = 0.1) +
+  geom_point(size = 5) +
+  coord_flip() +
+  #geom_text(aes(label = paste0(round(100 * DE / total.DE, 0), "%"))) +
+  scale_x_discrete("", position = "top") + scale_y_continuous("PC2 weight", 
+                                                              limits = c(-22, 22)) +
+  scale_fill_manual("", values = c("#009e74", "#cc79a7")) +
+  scale_color_manual("", values = c("#009e74", "#cc79a7")) +
+  #scale_color_distiller("-log10 Padj", palette = "Reds", direction = 1) +
+  theme_pubclean() +
+  theme(legend.position = "bottom")
+  #scale_fill_distiller(palette = "Spectral", limits = c(-32, 32))
+p3c
+```
+
+```{r Fig4}
+pdf("Fig4.pdf", height = 10, width = 11)
+figure <- multi_panel_figure(
+  rows = 8, 
+  columns = 11
+  )
+(figure %<>% fill_panel(p3a, column = 1:7, row = 1:5))
+(figure %<>% fill_panel(p3b, column = 8:11, row = 1:5))
+(figure %<>% fill_panel(p3c, column = 1:11, row = 6:8))
+dev.off()
+```
+
+```{r}
+data.atlas.ann %>%
+  ungroup %>%
+  filter(hla.class == "class1") %>%
+  select(hla, Term.ID, fold) %>%
+  dcast(Term.ID ~ hla, value.var = "fold", fill = 0) -> mat.atlas.ann1
+rownames(mat.atlas.ann1) <- mat.atlas.ann1$Term.ID
+mat.atlas.ann1$Term.ID <- NULL
+mat.atlas.ann1 <- as.matrix(mat.atlas.ann1)
+
+pca.atlas1 <- prcomp(mat.atlas.ann1)
+
+df.pca.atlas1 <- pca.atlas1$rotation %>% as.matrix %>% as.data.frame
+df.pca.atlas1$hla <- rownames(df.pca.atlas1)
+df.pca.atlas1 <- df.pca.atlas1 %>%
+  mutate(hla.class = ifelse(substr(hla, 1, 1) == "D", "class2", "class1"),
+         hla.gene = ifelse(hla.class == "class1", 
+                           substr(hla, 1, 1),
+                           substr(hla, 1, 2)))
+```
+
+```{r}
+df.pca.atlas1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = hla.gene)) +
+  geom_point() +
+  geom_text_repel(aes(label = hla), cex = 2.0) +
+  theme_minimal() + xlab("") + ylab("") +
+  scale_color_manual("HLA gene", values = c("#0071b2", "#56b3e9", "#009e74")) +
+  theme(aspect = 1)
+```
+
+### Incl MHCII
+
+## Protective alleles & viral proteins
+
+### Case of HIV protective alleles
+
+```{r}
+rbind(
+get_annots(data.pred.sel.s %>% filter(sel == 1, hla == "HLA-B5701") %>% .$entrez.id,
+           data.pred.sel.s %>% filter(sel == 1, hla == "HLA-B0801") %>% .$entrez.id) %>%
+  mutate(sel = 1),
+
+get_annots(data.pred.sel.s %>% filter(sel == 1, hla == "HLA-B0801") %>% .$entrez.id,
+           data.pred.sel.s %>% filter(sel == 1, hla == "HLA-B5701") %>% .$entrez.id) %>%
+  mutate(sel = -1)) %>%
+  group_by(Term.ID) %>%
+  filter(fold == max(fold)) -> go.enr.hiv
+```
+
+Via UniProt / QuickGO https://www.ebi.ac.uk/QuickGO/annotations?geneProductId=P59595
+
+```{r}
+go.hiv.prot <- fread("data/hiv_go_terms.txt") %>%
+  select(-hiv.go.tmp) %>%
+  unique %>%
+  group_by(Term.ID) %>%
+  summarize(hiv.gene = paste(hiv.gene %>% sort, collapse = ","))
+```
+
+```{r fig.width=8, fig.height=10}
+go.enr.hiv %>%
+  merge(go.hiv.prot) %>%
+  group_by(sel) %>%
+  summarize(count = sum(N))
+
+go.enr.hiv %>%
+  merge(go.hiv.prot, all.x = T) %>%
+  #filter(Term.ID %in% go.top.1) %>%
+  #mutate(Term = trunc_str(Term)) %>%
+  mutate(direction = ifelse(sel > 0, "More in B5701", "More in B0801")) %>%
+  ggplot(aes(y = fold * sel,
+             x = fct_reorder(paste(Ont, Term), fold * sel))) +
+  geom_bar(aes(fill = direction), stat = "identity") + #, position = "dodge") + 
+  geom_text(aes(label = hiv.gene), hjust = 0) +
+  geom_hline(yintercept = 0, color = "grey", linetype = "dashed") +
+  coord_flip() +
+  #geom_text(aes(label = paste0(round(100 * DE / total.DE, 0), "%"))) +
+  scale_x_discrete("", position = "top") + ylab("Log2 GO enrichment fold") +
+  scale_fill_manual("Direction", values = c("#56b4df", "#e69d00")) +
+  #scale_color_distiller("-log10 Padj", palette = "Reds", direction = 1) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  ggtitle("HIV protein associated terms")
+```
+
+... The fraction of HIV-derived peptides should be greater
+
+
+### SARS case
+
+HLA-C1502 - protection
+https://www.liebertpub.com/doi/10.1089/vim.2011.0024
+
+```{r}
+data.pred.sel.s %>% .$hla %>% unique
+rbind(
+get_annots(data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C1502") %>% .$entrez.id,
+           data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C0702") %>% .$entrez.id) %>%
+  mutate(sel = 1),
+get_annots(data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C0702") %>% .$entrez.id,
+           data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C1502") %>% .$entrez.id) %>%
+  mutate(sel = -1)) %>%
+  group_by(Term.ID) %>%
+  filter(fold == max(fold)) -> go.enr.sars
+```
+
+
+```{r}
+go.sars.prot <- fread("data/sars_go_terms.txt") %>%
+  select(-sars.go.tmp) %>%
+  unique %>%
+  group_by(Term.ID) %>%
+  summarize(sars.gene = paste(sars.gene %>% sort, collapse = ","))
+```
+
+
+```{r fig.width=8, fig.height=10}
+go.enr.sars %>%
+  merge(go.sars.prot) %>%
+  group_by(sel) %>%
+  summarize(count = sum(N))
+
+go.enr.sars %>%
+  merge(go.sars.prot, all.x = T) %>%
+  #filter(Term.ID %in% go.top.1) %>%
+  #mutate(Term = trunc_str(Term)) %>%
+  mutate(direction = ifelse(sel > 0, "More in C1502", "More in C0702")) %>%
+  ggplot(aes(y = fold * sel,
+             x = fct_reorder(paste(Ont, Term), fold * sel))) +
+  geom_bar(aes(fill = direction), stat = "identity") + #, position = "dodge") + 
+  geom_text(aes(label = sars.gene), hjust = 0) +
+  geom_hline(yintercept = 0, color = "grey", linetype = "dashed") +
+  coord_flip() +
+  #geom_text(aes(label = paste0(round(100 * DE / total.DE, 0), "%"))) +
+  scale_x_discrete("", position = "top") + ylab("Log2 GO enrichment fold") +
+  scale_fill_manual("Direction", values = c("#56b4df", "#e69d00")) +
+  #scale_color_distiller("-log10 Padj", palette = "Reds", direction = 1) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  ggtitle("SARS-CoV-1 protein associated terms")
+```
+
+```{r}
+```
+
+```{r}
+data.viruses <- fread("data/cov_hiv_flu_netmhcpan.txt") %>%
+  filter(hla != "HLA-B57:05") %>%
+  mutate(uniprot.id = str_split_fixed(ID, "_", 3)[,2])
+
+virus_prots <- readAAStringSet("data/cov_hiv_flu_prot.fasta") %>%
+  as.character
+
+meta.virusprot <- data.table(
+  uniprot.id = str_split_fixed(names(virus_prots), "[\\| ]", 4)[,2],
+  uniprot.id2 = str_split_fixed(names(virus_prots), "[\\| ]", 4)[,3],
+  protein.len = nchar(virus_prots)) %>%
+  mutate(name = str_split_fixed(uniprot.id2, "_", 2)[,1],
+         species.long = str_split_fixed(uniprot.id2, "_", 2)[,2],
+         species = case_when(
+           species.long == "I34A1" ~ "FluA",
+           species.long == "HV1H2" ~ "HIV1",
+           species.long == "CVHSA" ~ "CoV1",
+           species.long == "SARS2" ~ "CoV2",
+           species.long == "EBOZ5" ~ "Ebol"
+         ))
+
+data.viruses <- data.viruses %>%
+  merge(meta.virusprot)
+```
+
+```{r}
+data.viruses.s <- data.viruses %>%
+  group_by(hla, species, name) %>%
+  summarize(count = length(unique(Peptide))) %>%
+  ungroup %>%
+  merge(merge(data.viruses %>% select(species, name) %>% unique %>% as.data.frame,
+              data.frame(hla = data.viruses %>% .$hla %>% unique)) %>% mutate(count.x = 1),
+        all.y = T) %>%
+  mutate(count = ifelse(is.na(count), 0, count)) %>%
+  mutate(count = count + 1) %>%
+  mutate(total = sum(count)) %>%
+  group_by(hla) %>%
+  mutate(total.hla = sum(count)) %>%
+  group_by(species, name) %>%
+  mutate(total.prot = sum(count)) %>%
+  ungroup %>%
+  mutate(odds = log2(total * count / total.hla / total.prot))
+```
+
+```{r}
+mat.viruses.s <- data.viruses.s %>%
+  dcast(species+name~hla, value.var = "odds")
+
+unique(mat.viruses.s$species)
+
+mat.viruses.s1 <- mat.viruses.s %>%
+  select(-species, -name) %>% as.matrix
+rownames(mat.viruses.s1) <- paste0(mat.viruses.s$species, "_", mat.viruses.s$name)
+
+spec_col <- c("#8dd3c7", "#ffffb3",  "#80b1d3", "#bc80bd", "#fb8072")
+#names(spec_col) <- c("I34A1", "HV1H2", "CVHSA", "SARS2", "EBOZ5")
+
+names(spec_col) <- c("FluA","HIV1","CoV1","CoV2","Ebol")
+```
+
+```{r fig.width=8, fig.height=10}
+Heatmap(mat.viruses.s1,
+        name = "Presentation odds, log",
+        col = colorRamp2(c(-2, 0, 2), c("#2b83ba", "#ffffbf", "#d7191c")),
+        width = unit(7, "cm"), height = unit(22, "cm"),
+        heatmap_legend_param = list(
+          legend_direction = "horizontal")) +
+  rowAnnotation(nm = anno_text(paste0(mat.viruses.s$species, "|", mat.viruses.s$name),
+                               gp = gpar(fill = spec_col[mat.viruses.s$species], 
+                                         fontfamily = "mono",
+                                         col = "black", border = "white"))) -> hm
+
+p.genes <- grid::grid.grabExpr(hm %>% draw(heatmap_legend_side = "bottom"))
+grid.newpage()
+grid.draw(p.genes)
+```
+
+```{r}
+all.hla.t <- expand.grid(hla.1 = data.viruses.s$hla %>% unique, 
+                         hla.2 = data.viruses.s$hla %>% unique) %>%
+  mutate(hla.1 = as.character(hla.1),
+         hla.2 = as.character(hla.2)) %>%
+  filter(hla.1 > hla.2) %>%
+  group_by(hla.1, hla.2) %>%
+  do(cor.test(mat.viruses.s[, .$hla.1], mat.viruses.s[, .$hla.2]) %>% tidy) %>%
+  ungroup %>%
+  mutate(p.adj = p.adjust(p.value)) %>%
+  arrange(p.value)
+
+p.hla.t <- tibble(hla.1 = "none", hla.2 = "none",
+       type = "Theor.",
+       statistic = rt(20000, all.hla.t$parameter[1])) %>%
+  rbind(all.hla.t %>%
+          mutate(type = "Obs.") %>%
+          select(hla.1, hla.2, type, statistic)) %>%
+  mutate(type = factor(type, levels = c("Theor.", "Obs."))) %>%
+  ggplot(aes(y = type, x = statistic, fill = type)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
+  stat_halfeye(adjust = 2, alpha = 0.8) +
+  #geom_violin(aes(fill = type, color = type), trim = F, adjust = 2) +
+  #geom_boxplot(aes(color = type), width = 0.1, outlier.color = NA) +
+  scale_x_continuous("T-statistic\nfor Pearson R\n\n", breaks = c(-6,-3,0,3,6)) + ylab("") +
+  scale_fill_manual(guide = F, values = c("#878787", "#d6604d")) +
+  #scale_color_manual(guide = F, values = c("grey", "grey30")) +
+  theme_pubr()
+p.hla.t
+```
+
+
+```{r}
+p.ex0102 <- data.viruses.s %>%
+  filter(hla %in% c("HLA-A11:01", "HLA-A02:01", "HLA-B27:05")) %>%
+  mutate(hla = substr(hla, 5, 7)) %>%
+  arrange(hla, name) %>%
+  ggplot(aes(x = paste(species, name) %>% fct_reorder2(odds, hla),
+             y = odds, color = hla, group = hla)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey30") +
+  geom_line() +
+  geom_point() +
+  coord_flip() +
+  #scale_x_discrete("", position = "top") +
+  #ylab("") +
+  xlab("Viral proteins") + scale_y_continuous("log odds", limits = c(-2.2, 2.2)) +
+  #facet_grid(species~., space = "free", scales = "free") +
+  scale_color_manual("", values = c("#dfc27d", "#80cdc1", "#018571")) +
+  #theme_pubclean() +
+  #scale_linetype("") +
+  theme_pubr() +
+  theme(legend.position = "bottom",
+        legend.box = "vertical",
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+
+p.ex0102
+
+cor.test(mat.viruses.s$`HLA-A11:01`, mat.viruses.s$`HLA-A02:01`)
+cor.test(mat.viruses.s$`HLA-A11:01`, mat.viruses.s$`HLA-B27:05`)
+```
+
+```{r}
+go.enr.1 %>%
+  ungroup %>%
+  filter(sel == 1) %>%
+  select(hla, Term.ID, fold) %>%
+  dcast(Term.ID ~ hla, value.var = "fold", fun.aggregate = mean, fill = 0) -> mat.go.enr.1
+
+rownames(mat.go.enr.1) <- mat.go.enr.1$Term.ID
+mat.go.enr.1$Term.ID <- NULL
+mat.go.enr.1 <- as.matrix(mat.go.enr.1)
+
+merge(mat.go.enr.1 %>% t %>%
+        dist() %>%
+        #dist(method = "manhattan") %>%
+        as.matrix %>% 
+        melt %>%
+        filter(Var1 != Var2) %>%
+        mutate(dist.l = value  / nrow(mat.go.enr.1)) %>%
+        mutate(Var1 = substr(Var1, 5, 7),
+               Var2 = substr(Var2, 5, 7)) %>%
+        select(-value),
+      mat.viruses.s1 %>% t %>% 
+        dist() %>%
+        #dist(method = "manhattan") %>%
+        as.matrix %>% 
+        melt %>%
+        filter(Var1 != Var2) %>%
+        mutate(Var1 = gsub(":", "", Var1, fixed = T),
+               Var2 = gsub(":", "", Var2, fixed = T),
+               dist.v = value / nrow(mat.viruses.s1))  %>%
+        mutate(Var1 = substr(Var1, 5, 7),
+               Var2 = substr(Var2, 5, 7)) %>%
+        select(-value)) -> dist.viruses.ann
+
+with(dist.viruses.ann %>% filter(Var1 > Var2), cor.test(dist.l, dist.v))
+
+dist.viruses.ann %>%
+  group_by(Var1) %>%
+  group_modify(~cor.test(.x$dist.l, .x$dist.v) %>% tidy) -> dist.viruses.ann.stat
+
+p.ex0101 <- dist.viruses.ann %>%
+  merge(dist.viruses.ann.stat) %>%
+  mutate(Var1.1 = paste0(Var1, " R=", round(estimate, 2))) %>%
+  ggplot(aes(x = dist.l, y = dist.v)) +
+  geom_point() +
+  # geom_point(aes(color = Var1)) +
+  geom_smooth(method = "lm", linetype = "dashed", color = "grey30") +
+  geom_text_repel(aes(label = substr(Var2, 5, 7))) +
+  scale_x_continuous("GO enrichment profile distance (human)", n.breaks = 4) + 
+  scale_y_continuous("Viral presentation profile distance", n.breaks = 4) +
+  #scale_color_brewer("HLA", palette = "Paired") +
+  facet_wrap(~Var1.1, scales = "free", ncol = 4) +
+  theme_pubr() +
+  theme(legend.position = "bottom",
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+        #axis.text.x = element_blank(),
+        #axis.text.y = element_blank())
+
+p.ex0101
+```
+
+```{r}
+p.ex0103 <- data.viruses.s %>%
+  filter(species %in% c("CoV1", "CoV2")) %>%
+  ggplot(aes(x = substr(hla, 5, 10) %>% fct_reorder(odds), y = odds, 
+             color = species,
+             group = species)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_line() +
+  geom_point() +
+  geom_point(data = tibble(species = "CoV1", hla = "HLA-A02:01", odds = -0.79, name = "R1A"), color = NA) +
+ # coord_flip() +
+  #scale_x_discrete("", position = "top") +
+  #scale_y_continuous("log odds", n.breaks = 5) +
+  scale_y_continuous("log odds", ) +
+  xlab("HLA allele") +
+  facet_wrap(~name, scales = "free_y") +
+  #facet_grid(species~., space = "free", scales = "free") +
+  scale_color_manual("", values = c("#80b1d3", "#bc80bd")) +
+  #theme_pubclean() +
+  theme_pubr() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) #element_text(angle = 90, vjust = 0.5))
+
+p.ex0103
+
+#t.test(mat.viruses.s$`HLA-A01:01`, mat.viruses.s$`HLA-A02:01`, paired = T)
+```
+
+```{r Fig5}
+pdf("Fig5.pdf", height = 12, width = 10)
+figure <- multi_panel_figure(
+  columns = 11,
+  rows = 13)
+(figure %<>% fill_panel(p.genes, row = 1:13, column = 1:5))
+(figure %<>% fill_panel(p.hla.t, row = 5:8-4, column = 6:8))
+(figure %<>% fill_panel(p.ex0102, row = 5:8-4, column = 9:11))
+(figure %<>% fill_panel(p.ex0103, row = 9:13-4, column = 6:11))
+(figure %<>% fill_panel(p.ex0101, row = 1:4+(13-4), column = 6:11))
+dev.off()
+```
+
+```{r}
+```
+
+
+
+### Supplementary Note 1
+### Independent validation of HLA presentation biases using MHCflurry and DAVID software tools
+
+```{r}
+data.pred.flurry <- fread("mhcflurry_output/mhcflurry_human_proteome_pred.csv") %>% 
+  mutate(ligand.len = nchar(peptide)) %>%
+  filter(affinity_percentile < 2)
+
+
+data.pred.full.flurry <- data.pred.flurry %>%
+  mutate(hla = gsub("[\\*\\:]", "", best_allele),
+         uniprot.id = str_split_fixed(sequence_name, "[\\| ]", 3)[,2]) %>%
+  group_by(uniprot.id, hla, ligand.len) %>%
+  summarise(count = n()) 
+
+data.pred.sel.s.flurry <- data.pred.full.flurry %>%
+  filter(ligand.len == 9) %>%
+  merge(meta.prot, by = "uniprot.id") %>%
+  group_by(hla) %>%
+  mutate(P0 = sum(count) / sum(protein.len - ligand.len)) %>%
+  ungroup %>%
+  rowwise() %>%
+  mutate(odds = log2((count + 1) / (protein.len + 1 - ligand.len) / P0),
+         p.value = binom.test(count + 1, protein.len + 1 - ligand.len, 
+                              p = P0, alternative = "two.sided")$p.value) %>%
+  group_by(hla) %>%
+  mutate(p.value.adj = p.adjust(p.value, method = "BH")) %>%
+  ungroup %>%
+  mutate(hla.gene = substr(hla, 5, 5),
+         sel = ifelse(odds >= 1 & p.value.adj < 0.05, 1, 
+                      ifelse(odds <= -1 & p.value.adj < 0.05, -1,
+                             0)),
+         protein.len.q = cut(protein.len, quantile(protein.len)))  
+
+pfigsn1a <- data.pred.sel.s.flurry %>%
+  filter(!(hla %in% excl_for_now)) %>%
+  mutate(hla = factor(hla, levels = hla_incl_vert)) %>%
+  ggplot(aes(x = odds, y = pmin(-log10(p.value), 20), size = count,
+             color = sel %>% as.factor())) +
+  geom_point() +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  #geom_hline(yintercept = 3, linetype = "dashed", color = "grey") +
+  scale_size_continuous("Number of\npeptides", breaks = c(1, 10, 100, 1000)) +
+  scale_color_manual("Ligand -", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted", "No change", "Enriched")) +
+  scale_x_continuous(TeX("$log_{2}\\,\\left[\\frac{ligands_{obs}}{ligands_{exp}}\\right]$"), limits = c(-5, 5)) +
+  ylab(TeX("$-log_{10}\\~Pvalue_{adj}$")) +
+  facet_wrap(~hla, ncol = 2) + #facet_wrap(~hla, nrow = 2) +
+  theme_pubclean() + 
+  theme(legend.position = "bottom", 
+        legend.box = "vertical")
+
+data.pred.sel.s.len.flurry <- data.pred.sel.s.flurry %>%
+  filter(!(hla %in% excl_for_now)) %>%
+  group_by(hla, sel, protein.len.q) %>%
+  summarize(count = n()) %>%
+  group_by(hla, sel) %>%
+  mutate(total = sum(count)) %>%
+  mutate(p = count / total)
+
+pfigsn2 <- data.pred.sel.s.len.flurry %>%
+  merge(expand.grid(hla = data.pred.sel.s.len.flurry$hla %>% unique, 
+                    sel = data.pred.sel.s.len.flurry$sel %>% unique,
+                    protein.len.q = data.pred.sel.s.len.flurry$protein.len.q %>% unique), all = T) %>%
+  mutate(p = ifelse(is.na(p), 0, p)) %>%
+  mutate(hla = factor(hla, levels = hla_incl)) %>%
+  ggplot(aes(x = protein.len.q %>% as.integer, 
+             y = p,
+             fill = sel %>% as.factor,
+             color = sel %>% as.factor)) +
+  geom_errorbar(aes(ymin = p, ymax = p + sqrt(p * (1-p) / total)),
+                position = "dodge") +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual("", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted","No change","Enriched")) +
+  scale_color_manual("", 
+                     values = c("#56b4df", "#000000", "#e69d00"),
+                     labels=c("Depleted","No change","Enriched")) +
+  xlab("Protein length quartile") + ylab("Fraction of proteins") +
+  facet_wrap(~hla, nrow = 2) +
+  theme_pubclean() + 
+  theme(aspect = 1, legend.position = "bottom")
+
+data.pred.sel.s.flurry %>%
+  select(hla, sel) %>%
+  unique %>%
+  filter(sel != 0) %>%
+  group_by(sel, hla) %>%
+  group_modify(~ get_annots(filter(data.pred.sel.s.flurry, hla == .y$hla, sel == .y$sel)$entrez.id,
+                            filter(data.pred.sel.s.flurry, hla == .y$hla, sel == 0)$entrez.id)) -> go.enr.1.flurry
+
+go.top.1.flurry <- go.enr.1.flurry %>%
+  group_by(sel, hla) %>%
+  filter(rank(P.DE.adj) <= 20) %>%
+  .$Term.ID %>% unique
+
+pfigsn1b <- go.enr.1.flurry %>%
+  filter(!(hla %in% excl_for_now),
+         Term.ID %in% go.top.1.flurry) %>%
+  mutate(Term = trunc_str(Term, 4),
+         direction = ifelse(sel > 0, "enriched", "depleted")) %>%
+  ggplot(aes(x = factor(hla, levels = hla_incl_vert),
+             y = fct_reorder2(paste(Ont, Term), fold, paste(sel, hla)))) +
+  geom_quasirandom(aes(size = fold, fill = direction), shape = 21, width = 0.2) + 
+  #geom_text(aes(label = paste0(round(100 * DE / total.DE, 0), "%"))) +
+  scale_y_discrete("", position = "right") + 
+  #scale_x_discrete("", position = "top") + 
+  xlab("") +
+  scale_fill_manual("HLA ligand -", values = c("#56b4df", "#e69d00")) +
+  #scale_color_distiller("-log10 Padj", palette = "Reds", direction = 1) +
+  scale_size_continuous("GO term enrinchment\nfold, log2", breaks = c(1, 2 ,4)) +
+  theme_pubclean() +
+  theme(legend.position = "bottom", 
+        legend.box = "vertical",
+        axis.text.x = element_text(angle = 90, vjust = 0.5),
+        axis.text.y = element_text(family = "mono", size = 8))
+
+```
+
+```{r FigSN1.pdf}
+pdf("FigSN1.pdf", height = 14, width = 14)
+figure <- multi_panel_figure(columns = 14, rows = 12)
+(figure %<>% fill_panel(pfigsn1a, row = 1:11, column = 1:6))
+(figure %<>% fill_panel(pfigsn1b, row = 1:12, column = 7:14))
+dev.off()
+```
+
+```{r Suppl Note Fig 1 fig.width=14, fig.height=14}
+#library("cowplot")
+#ggdraw() +
+#  draw_plot(pfigsn1a, x = 0, y = 0, width = .4, height = 1) +
+#  draw_plot(pfigsn1b, x = .45, y = 0, width = .55, height = 1) +
+#  draw_plot_label(label = c("A", "B"), size = 15,
+#                  x = c(0, 0.42), y = c(1, 1))
+```
+
+```{r Suppl Note Fig 2}
+pfigsn2
+```
+
+```{r}
+```
