@@ -403,13 +403,8 @@ pfig3b <- go.enr.1 %>%
   distinct() %>% 
   mutate(Term = str_wrap(Term, 40)) %>% 
   arrange(Ontology) %>% 
-  tableGrob(rows = NULL, theme = ttheme_default(
-    core = list(fg_params=list(cex = .7),
-                padding=unit.c(unit(2, "mm"), unit(2, "mm"))),
-    colhead = list(fg_params=list(cex = .7),
-                   padding=unit.c(unit(2, "mm"), unit(2, "mm"))),
-    rowhead = list(fg_params=list(cex = .7),
-                   padding=unit.c(unit(2, "mm"), unit(2, "mm")))))
+  ggtexttable(rows = NULL,
+                  theme = ttheme("classic", base_size = 8, padding = unit(c(2, 2), "mm")))
 
 
 go.depl.genes <- go.depl %>%
@@ -798,6 +793,8 @@ data.pred.sel.s.all <- fread("data/genes_enr_extended.tsv")
 
 data.pred.sel.s.all.len <- data.pred.sel.s.all %>%
   filter(hla %in% hla_extended) %>%
+  merge(aa.freq.prots.q %>% 
+          select(uniprot.id2, protein.len.q) %>% distinct()) %>% 
   group_by(hla, sel, protein.len.q) %>%
   summarize(count = n()) %>%
   group_by(hla, sel) %>%
@@ -862,6 +859,8 @@ pfigs6 <- ggdraw() +
   draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 10,
                   x = c(.1, 0, .6, 0, .5), y = c(1, .6, .6, .22, .22)) 
 
+pfigs6
+
 pdf("figures/FigS6.pdf", height = 10, width = 8)
 pfigs6
 dev.off()
@@ -894,7 +893,8 @@ pfigs5a <- go.depl.all %>%
   mutate(Alleles = paste0(n.allele, " (", round(frac.allele * 100, 0),
                               "%)")) %>% 
   select(Ontology = Ont, Term, Alleles) %>% 
-  plot_table()
+  ggtexttable(rows = NULL,
+              theme = ttheme("classic", base_size = 9, padding = unit(c(2, 2), "mm")))
 
 #Alleles-exceptions
 go.depl.all.except <- go.enr.all %>% 
@@ -1169,65 +1169,6 @@ dev.off()
 ... The fraction of HIV-derived peptides should be greater
 
 
-### SARS case
-
-HLA-C1502 - protection
-https://www.liebertpub.com/doi/10.1089/vim.2011.0024
-
-```{r}
-rbind(
-get_annots(data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C1502") %>% .$entrez.id,
-           data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C0702") %>% .$entrez.id) %>%
-  mutate(sel = 1),
-get_annots(data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C0702") %>% .$entrez.id,
-           data.pred.sel.s %>% filter(sel == 1, hla == "HLA-C1502") %>% .$entrez.id) %>%
-  mutate(sel = -1)) %>%
-  group_by(Term.ID) %>%
-  filter(fold == max(fold)) -> go.enr.sars
-```
-
-
-```{r}
-go.sars.prot <- fread("data/sars_go_terms.txt") %>%
-  select(-sars.go.tmp) %>%
-  unique %>%
-  group_by(Term.ID) %>%
-  summarize(sars.gene = paste(sars.gene %>% sort, collapse = ","))
-```
-
-
-```{r fig.width=8, fig.height=10}
-go.enr.sars %>%
-  merge(go.sars.prot) %>%
-  group_by(sel) %>%
-  summarize(count = sum(N))
-
-pfigs8 <- go.enr.sars %>%
-  merge(go.sars.prot, all.x = T) %>%
-  #filter(Term.ID %in% go.top.1) %>%
-  #mutate(Term = trunc_str(Term)) %>%
-  mutate(direction = ifelse(sel > 0, "More in C1502", "More in C0702")) %>%
-  ggplot(aes(y = fold * sel,
-             x = fct_reorder(paste(Ont, Term), fold * sel))) +
-  geom_bar(aes(fill = direction), stat = "identity") + #, position = "dodge") + 
-  geom_text(aes(label = sars.gene), hjust = 0) +
-  geom_hline(yintercept = 0, color = "grey", linetype = "dashed") +
-  coord_flip() +
-  #geom_text(aes(label = paste0(round(100 * DE / total.DE, 0), "%"))) +
-  scale_x_discrete("", position = "top") + ylab("Log2 GO enrichment fold") +
-  scale_fill_manual("Direction", values = c("#56b4df", "#e69d00")) +
-  #scale_color_distiller("-log10 Padj", palette = "Reds", direction = 1) +
-  theme_minimal() +
-  theme(legend.position = "bottom") +
-  ggtitle("SARS-CoV-1 protein associated terms")
-
-pfigs8
-
-pdf("figures/FigS8.pdf", height = 10, width = 8)
-pfigs8
-dev.off()
-```
-
 ### Analysis of presentation of viral genes by 12 alleles
 
 ```{r}
@@ -1496,27 +1437,43 @@ ggtexttable(pst4, rows = NULL,
 
 pst4
 ```
+Compute distances between GO enrichment profiles for all pairs of HLA alleles
+```{r}
+go.dist <- go.enr.all %>%
+  ungroup %>%
+  mutate(fold.sign = fold * sel) %>%
+  select(hla, Term.ID, fold.sign) %>%
+  dcast(Term.ID ~ hla, value.var = "fold.sign", fun.aggregate = mean, fill = 0) %>%
+  select(-Term.ID) %>% 
+  t %>%
+  dist() %>%
+  as.matrix %>% 
+  melt %>%
+  filter(Var1 != Var2) %>%
+  mutate(dist.l = value  / (length(go.enr.all$Term.ID %>% unique()))) %>%
+  select(MHC.1 = Var1, MHC.2 = Var2, dist.l)
+```
 
 Distance between alleles within frequent haplotypes
 ```{r}
-haplotypes.f.a <- haplotypes.f %>% 
+haplotypes.a <- haplotypes %>% 
   select(Population, Frequency, MHC.1 = HLA.A, MHC.2 = HLA.B) %>%
-  rbind(haplotypes.f %>% 
+  rbind(haplotypes %>% 
           select(Population, Frequency, MHC.1 = HLA.A, MHC.2 = HLA.C)) %>%
-  rbind(haplotypes.f %>% 
+  rbind(haplotypes %>% 
           select(Population, Frequency, MHC.1 = HLA.B, MHC.2 = HLA.C)) %>%
   group_by(Population, MHC.1, MHC.2) %>%
   summarise(Frequency = sum(Frequency)) %>%
   mutate(haplotype = 1) %>% 
   ungroup()
 
-haplotypes.f.control <- c(haplotypes.f.a$MHC.1, haplotypes.f.a$MHC.2) %>% 
+haplotypes.control <- c(haplotypes.a$MHC.1, haplotypes.a$MHC.2) %>% 
   unique() %>% 
   expand.grid(MHC.1 = ., MHC.2 = .) %>% 
   filter(substr(MHC.1, 1, 5) < substr(MHC.2, 1, 5)) %>% 
   mutate(MHC.1.short = substr(MHC.1, 1, 7),
          MHC.2.short = substr(MHC.2, 1, 7)) %>%   
-  merge(haplotypes.f.a %>% 
+  merge(haplotypes.a %>% 
           mutate(MHC.1.short = substr(MHC.1, 1, 7),
                  MHC.2.short = substr(MHC.2, 1, 7)) %>% 
           select(MHC.1.short, MHC.2.short, haplotype), all = T) %>% 
@@ -1524,29 +1481,27 @@ haplotypes.f.control <- c(haplotypes.f.a$MHC.1, haplotypes.f.a$MHC.2) %>%
   filter(haplotype == 0) %>% 
   select(MHC.1, MHC.2, haplotype)
 
-haplotypes.f.dist <- haplotypes.f.a %>% 
-  bind_rows(haplotypes.f.control) %>% 
+haplotypes.dist <- haplotypes.a %>% 
+  bind_rows(haplotypes.control) %>% 
   merge(go.dist, all.x = T) %>% 
   mutate(genes = paste(substr(MHC.1,1,5), substr(MHC.2,1,5), sep = "/")) %>% distinct(MHC.1, MHC.2, .keep_all = T) %>% 
   mutate(haplotype = ifelse(haplotype == 1, "Haplotype", "Control") %>% factor(levels = c("Haplotype", "Control"))) 
 
-stat.test <- haplotypes.f.dist %>%
+stat.test <- haplotypes.dist %>%
   group_by(genes) %>%
   wilcox_test(dist.l ~ haplotype) %>%
   adjust_pvalue(method = "bonferroni") %>%
   add_significance() %>% 
   add_y_position()
 
-pfig7 <- haplotypes.f.dist %>% 
+pfig7 <- haplotypes.dist %>% 
   ggplot(aes(x = haplotype, y = dist.l)) +
   facet_wrap(~genes) +
-  #geom_violin(alpha=.2, color='black', fill = 'grey') + 
-  #geom_jitter(size=.5)+
   geom_quasirandom(size = .5, color = "grey50") +
   geom_boxplot(alpha = 0, outlier.shape = NaN) +
   stat_summary(fun.y="median", geom='point', shape = 95, size = 15, color = 'red') +
   stat_pvalue_manual(stat.test, label = "p.adj.signif", tip.length = 0.01) +
-  theme_bw() + #guides(fill=FALSE) +
+  theme_bw() + 
   xlab("") + ylab("Distance between GO enrichment profiles")
 
 pfig7
