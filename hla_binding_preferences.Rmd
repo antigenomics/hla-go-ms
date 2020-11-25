@@ -111,6 +111,25 @@ data.pred.sel.s <- data.pred.sel.s %>%
          protein.len.q = cut(protein.len, quantile(protein.len)))
 ```
 
+Motifs of surveyed HLA alleles
+```{r FigS1, fig.width=10, fig.height=12}
+pfigs1 <- ggdraw() + 
+  draw_image("motifs/FigS1/HLA-A0201.png", x = .5, y = 1.05, hjust = 1, vjust = 1, width = 0.5, height = .45) +
+  draw_image("motifs/FigS1/HLA-A1101.png", x = 1, y = 1.05, hjust = 1, vjust = 1, width = 0.5, height = .45) +
+  draw_image("motifs/FigS1/HLA-B0702.png", x = .5, y = .72, hjust = 1, vjust = 1, width = 0.5, height = .45) +
+  draw_image("motifs/FigS1/HLA-B2705.png", x = 1, y = .72, hjust = 1, vjust = 1, width = 0.5, height = .45) +
+  draw_image("motifs/FigS1/HLA-C0202.png", x = .5, y = .39, hjust = 1, vjust = 1, width = 0.5, height = .45) +
+  draw_image("motifs/FigS1/HLA-C1502.png", x = 1, y = .39, hjust = 1, vjust = 1, width = 0.5, height = .45) +
+  draw_plot_label(c("HLA-A0201", "HLA-A1101", "HLA-B0702", "HLA-B2705", "HLA-C0202", "HLA-C1502"), 
+                  x = c(.15, .65, .15, .65, .15, .65), y = c(1, 1, .67, .67, .34, .34))
+
+pfigs1
+
+pdf("figures/FigS1.pdf", height = 12, width = 10)
+pfigs1
+dev.off()
+```
+
 Plot over- and under-represented proteins according to HLA ligand frequency
 
 ```{r Fig2a, fig.width = 6, fig.height = 10}
@@ -293,17 +312,24 @@ pfig2b <- go.enr.1 %>%
 pfig2b
 ```
 
-```{r Fig2}
+```{r Fig2, fig.height = 14, fig.width = 14}
+pfig2 <- ggdraw() +
+  draw_plot(pfig2a, x = 0, y = 0, width = .42, height = 1) +
+  draw_plot(pfig2b, x = .43, y = -.1, width = .57, height = 1.1) +
+  draw_plot_label(label = c("A", "B"), size = 11,
+                  x = c(0, .42), y = c(1, 1))
+
+pfig2
+
 pdf("figures/Fig2.pdf", height = 14, width = 14)
-figure <- multi_panel_figure(columns = 14, rows = 12)
-(figure %<>% fill_panel(pfig2a, row = 1:11, column = 1:6))
-(figure %<>% fill_panel(pfig2b, row = 1:12, column = 7:14))
+pfig2
 dev.off()
 ```
 
+
 ### Amino acid composition of HLEPs
 
-```{r}
+```{r Fig3a}
 #function for calculation of amino acid composition of a protein
 aa_freq_count <- function(prot.seq, id_name) {  
   as.character(prot.seq) %>% 
@@ -323,12 +349,6 @@ aa.freq.prots <- data.table(seq = human_prots,
   rbindlist() %>% 
   rename(uniprot.id2 = id)
   
-#human_prots.a <- human_prots
-#names(human_prots.a) <- str_split_fixed(names(human_prots), "[\\| ]", 4)[,2]
-#human_prots.a2 <- human_prots
-#names(human_prots.a2) <- str_split_fixed(names(human_prots), "GN=", 4)[,2]
-#names(human_prots.a2) <- str_split_fixed(names(human_prots.a2), " ", 4)[,1]
-
 #amino acid composition of proteins enriched or depleted for selected alleles
 data.pred.sel.s.aafreq <- data.pred.sel.s %>%
   filter(hla %in% hla_incl) %>%
@@ -370,7 +390,7 @@ pfig3a
 
 ### Amino acid composition of proteins of GO terms depleted for all alleles but HLA-B0702
 
-```{r}
+```{r Fig3b}
 data(gene_GO_terms)
 
 #Which genes correspond to particular GO terms
@@ -443,12 +463,12 @@ pfig3c <- go.depl.aafreq %>%
 pfig3c 
 ```
 
-```{r, fig.width=7, fig.height=8}
+```{r Fig3, fig.width=7, fig.height=8}
 pfig3 <- ggdraw() +
   draw_plot(pfig3a, x = 0, y = .43, width = 1, height = .57) +
   draw_plot(pfig3b, x = .15, y = 0, width = .1, height = .4) +
   draw_plot(pfig3c, x = .4, y = 0, width = .58, height = .4) +
-  draw_plot_label(label = c("A", "B", "C"), size = 10,
+  draw_plot_label(label = c("A", "B", "C"), size = 11,
                   x = c(0, 0, .4), y = c(1, .42, .42))
 
 pfig3
@@ -461,7 +481,7 @@ dev.off()
 
 ### Different amino acid composition of proteins of different length quartiles
 
-```{r}
+```{r FigS6a}
 aa.short.2 <- tibble(aminoacid = c("L","F","I","M","V","W","Y","C","H","A","G","P","T","S","Q","N","D","E","R","K"), short = c(rep("LFIMV",5), rep("other", 6), "P", rep("other", 4),"DE","DE","RK","RK"))
 
 levels.anchors <- c("LFIMV", "RK", "DE", "P", "other")
@@ -504,7 +524,7 @@ data.seph.ann <- data.seph %>%
   group_modify(~get_annots(.x$entrez.id, .threshold = 1.01))
 ```
 
-```{r}
+```{r Fig4a}
 go.enr.1 %>%
   filter(hla %in% c("HLA-A0201", "HLA-A1101"),
          sel == 1) %>%
@@ -573,7 +593,7 @@ data.pred.len <- data.pred.len %>%
          protein.len.q = cut(protein.len, quantile(protein.len)))
 ```
 
-```{r}
+```{r TableS2}
 pst2 <- data.pred.len %>%
   filter(sel == 1) %>%
   group_by(hla, ligand.len) %>%
@@ -595,7 +615,7 @@ ggtexttable(pst2, rows = NULL,
                   theme = ttheme("classic"))
 ```
 
-```{r}
+```{r FigS3}
 pfigs3 <- data.pred.len %>%
   ggplot(aes(x = odds, y = pmin(-log10(p.value), 20), size = count,
              color = sel %>% as.factor())) +
@@ -666,7 +686,7 @@ go.top.len <- go.enr.len %>%
   .$Term.ID %>% unique
 ```
 
-````{r fig.height=14, fig.width=10}
+````{r FigS4, fig.height=14, fig.width=10}
 pfigs4 <- go.enr.len %>%
   filter(Term.ID %in% go.top.len) %>%
   mutate(Term = trunc_str(Term),
@@ -714,7 +734,7 @@ go.enr.len %>%
   merge(data.seph.ann) -> data.seph.ann.len
 ```
 
-```{r fig.width=7, fig.height=7}
+```{r Fig4b, fig.width=7, fig.height=7}
 pfig4b <- data.seph.ann.len %>%
   filter(ligand.len == ligand.len.orig) %>%
   filter(Ont == "CC") %>%
@@ -738,13 +758,16 @@ pfig4b <- data.seph.ann.len %>%
 pfig4b
 ```
 
-```{r Fig4}
+```{r Fig4, fig.width=8, fig.height=12}
+pfig4 <- ggdraw() +
+  draw_plot(pfig4a, x = 0, y = .58, width = 1, height = .42) +
+  draw_plot(pfig4b, x = 0, y = 0, width = 1, height = .57) +
+  draw_plot_label(label = c("A", "B"), size = 11,
+                  x = c(0, 0), y = c(1, .57))
+pfig4
+
 pdf("figures/Fig4.pdf", height = 12, width = 8)
-figure <- multi_panel_figure(
-  columns = 8,
-  rows = 12)
-(figure %<>% fill_panel(pfig4a, row = 1:5, column = 1:8))
-(figure %<>% fill_panel(pfig4b, row = 6:12, column = 1:8))
+pfig4
 dev.off()
 ```
 
@@ -779,16 +802,22 @@ pst3c <- hla.freq %>%
                   theme = ttheme("classic"))
 ```
 
-```{r, fig.width=14, fig.height=12}
-ggdraw() +
+```{r TableS3, fig.width=14, fig.height=12}
+pst3 <- ggdraw() +
   draw_plot(pst3a, x = -.3, y = .107, width = 1, height = 1) +
   draw_plot(pst3b, x = 0, y = .007, width = 1, height = 1) +
-  draw_plot(pst3c, x = .3, y = .21, width = 1, height = 1) 
+  draw_plot(pst3c, x = .3, y = .212, width = 1, height = 1) 
+
+pst3
+
+pdf("figures/TableS3.pdf", height = 12, width = 14)
+pst3
+dev.off()
 ```
 
 ### Explore protein length bias for 93 HLA alleles
 
-```{r}
+```{r FigS6abc}
 data.pred.sel.s.all <- fread("data/genes_enr_extended.tsv")
 
 data.pred.sel.s.all.len <- data.pred.sel.s.all %>%
@@ -834,7 +863,7 @@ pfigs6c
 ```
 
 
-```{r, fig.width=8, fig.height=10}
+```{r FigS6, fig.width=8, fig.height=10}
 pfigs6 <- ggdraw() +
   draw_plot(pfigs6a, x = .15, y = .65, width = .7, height = .35) +
   draw_plot(pfigs6b, x = 0, y = .23, width = .6, height = .4) +
@@ -856,7 +885,7 @@ pfigs6 <- ggdraw() +
   draw_text("HLA-A3303", x = .4, y = .14) +
   draw_text("HLA-B4402", x = .68, y = .14) +
   draw_text("HLA-B4403", x = .83, y = .14) +
-  draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 10,
+  draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 11,
                   x = c(.1, 0, .6, 0, .5), y = c(1, .6, .6, .22, .22)) 
 
 pfigs6
@@ -877,7 +906,7 @@ go.enr.all <- fread("data/GO_enr_extended.tsv")
 
 Which terms are more frequenty depleted? 
 In which alleles they are not depleted?
-```{r}
+```{r FigS5abc}
 #GO terms depleted in majority of alleles
 go.depl.all <- go.enr.all %>% 
   select(sel, hla, Term.ID, Term, Ont) %>% 
@@ -944,7 +973,7 @@ pfigs5c <- go.depl.all.genes.aafreq %>%
 pfigs5c
 ```
 
-```{r, fig.width=9, fig.height=9}
+```{r FigS5, fig.width=9, fig.height=9}
 pfigs5 <- ggdraw() +
   draw_plot(pfigs5a, x = .15, y = .60, width = .7, height = .35) +
   draw_plot(pfigs5c, x = .4, y = .1, width = .6, height = .4) +
@@ -970,7 +999,7 @@ pfigs5 <- ggdraw() +
   draw_text("HLA-B5502", x = .12, y = .25, size = 11) +
   draw_text("HLA-B3503", x = .3, y = .25, size = 11) +
   draw_text("HLA-B5501", x = .2, y = .13, size = 11) +
-  draw_plot_label(label = c("A", "B", "C"), size = 10,
+  draw_plot_label(label = c("A", "B", "C"), size = 11,
                   x = c(.2, 0, .4), y = c(1, .53, .53)) 
 pfigs5
 
@@ -1021,7 +1050,7 @@ df.pca.atlas <- df.pca.atlas %>%
                            substr(hla, 1, 2)))
 ```
 
-```{r fig.height=8, fig.width=8}
+```{r Fig5a, fig.height=8, fig.width=8}
 pfig5a <- df.pca.atlas %>%
   ggplot(aes(x = PC1, y = PC2, color = hla.gene)) +
   geom_density_2d(bins = 4) +
@@ -1037,7 +1066,7 @@ pfig5a
 
 Distances between genes
 
-```{r}
+```{r Fig5b}
 mat.atlas.ann %>% t %>% 
   dist %>% #(method = "manhattan") %>%
   as.matrix %>% 
@@ -1064,7 +1093,7 @@ pfig5b <- dist.atlas.ann %>%
 pfig5b
 ```
 
-```{r}
+```{r Fig5c}
 df.hla12.go <- pca.atlas$x %>% as.tibble %>%
   select(PC2)
 df.hla12.go$Term.ID <- rownames(pca.atlas$x)
@@ -1094,15 +1123,17 @@ pfig5c <- df.hla12.go.2 %>%
 pfig5c
 ```
 
-```{r Fig5}
+```{r Fig5, fig.height=10, fig.width=11}
+pfig5 <- ggdraw() +
+  draw_plot(pfig5a, x = 0, y = .38, width = .64, height = .62) +
+  draw_plot(pfig5b, x = .64, y = .38, width = .36, height = .62) +
+  draw_plot(pfig5c, x = 0, y = 0, width = 1, height = .37) +
+  draw_plot_label(label = c("A", "B", "C"), size = 11,
+                  x = c(0, .63, 0), y = c(1, 1, .38))
+pfig5
+
 pdf("figures/Fig5.pdf", height = 10, width = 11)
-figure <- multi_panel_figure(
-  rows = 8, 
-  columns = 11
-  )
-(figure %<>% fill_panel(pfig5a, column = 1:7, row = 1:5))
-(figure %<>% fill_panel(pfig5b, column = 8:11, row = 1:5))
-(figure %<>% fill_panel(pfig5c, column = 1:11, row = 6:8))
+pfig5
 dev.off()
 ```
 
@@ -1134,7 +1165,7 @@ go.hiv.prot <- fread("data/hiv_go_terms.txt") %>%
   summarize(hiv.gene = paste(hiv.gene %>% sort, collapse = ","))
 ```
 
-```{r fig.width=8, fig.height=10}
+```{r FigS7, fig.width=8, fig.height=10}
 go.enr.hiv %>%
   merge(go.hiv.prot) %>%
   group_by(sel) %>%
@@ -1233,7 +1264,7 @@ spec_col <- c("#8dd3c7", "#ffffb3",  "#80b1d3", "#bc80bd", "#fb8072")
 names(spec_col) <- c("FluA","HIV1","CoV1","CoV2","Ebol")
 ```
 
-```{r fig.width=8, fig.height=10}
+```{r Fig6a, fig.width=8, fig.height=10}
 Heatmap(mat.viruses.s1,
         name = "Presentation odds, log",
         col = colorRamp2(c(-2, 0, 2), c("#2b83ba", "#ffffbf", "#d7191c")),
@@ -1250,7 +1281,7 @@ grid.newpage()
 grid.draw(pfig6a)
 ```
 
-```{r}
+```{r Fig6b}
 all.hla.t <- expand.grid(hla.1 = data.viruses.s$hla %>% unique, 
                          hla.2 = data.viruses.s$hla %>% unique) %>%
   mutate(hla.1 = as.character(hla.1),
@@ -1282,7 +1313,7 @@ pfig6b <- tibble(hla.1 = "none", hla.2 = "none",
 pfig6b
 ```
 
-```{r}
+```{r Fig6c}
 pfig6c <- data.viruses.s %>%
   filter(hla %in% c("HLA-A11:01", "HLA-A02:01", "HLA-B27:05")) %>%
   mutate(hla = substr(hla, 5, 7)) %>%
@@ -1312,7 +1343,7 @@ cor.test(mat.viruses.s$`HLA-A11:01`, mat.viruses.s$`HLA-A02:01`)
 cor.test(mat.viruses.s$`HLA-A11:01`, mat.viruses.s$`HLA-B27:05`)
 ```
 
-```{r}
+```{r Fig6e}
 go.enr.1 %>%
   ungroup %>%
   filter(sel == 1) %>%
@@ -1374,7 +1405,7 @@ dist.viruses.ann %>%
 pfig6e
 ```
 
-```{r}
+```{r Fig6d}
  pfig6d <- data.viruses.s %>%
   filter(species %in% c("CoV1", "CoV2")) %>%
   ggplot(aes(x = substr(hla, 5, 10) %>% fct_reorder(odds), y = odds, 
@@ -1403,16 +1434,19 @@ pfig6d
 #t.test(mat.viruses.s$`HLA-A01:01`, mat.viruses.s$`HLA-A02:01`, paired = T)
 ```
 
-```{r Fig6}
+```{r Fig6, fig.width=10, fig.height=12}
+pfig6 <- ggdraw() +
+  draw_plot(pfig6a, x = 0, y = 0, width = .45, height = 1) +
+  draw_plot(pfig6b, x = .46, y = .7, width = .27, height = .3) +
+  draw_plot(pfig6c, x = .73, y = .7, width = .27, height = .3) +
+  draw_plot(pfig6d, x = .46, y = .35, width = .54, height = .35) +
+  draw_plot(pfig6e, x = .46, y = 0, width = .54, height = .35) +
+  draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 11,
+                  x = c(0, .45, .72, .45, .45), y = c(1, 1, 1, .7, .35))
+pfig6
+
 pdf("figures/Fig6.pdf", height = 12, width = 10)
-figure <- multi_panel_figure(
-  columns = 11,
-  rows = 13)
-(figure %<>% fill_panel(pfig6a, row = 1:13, column = 1:5))
-(figure %<>% fill_panel(pfig6b, row = 5:8-4, column = 6:8))
-(figure %<>% fill_panel(pfig6c, row = 5:8-4, column = 9:11))
-(figure %<>% fill_panel(pfig6d, row = 9:13-4, column = 6:11))
-(figure %<>% fill_panel(pfig6e, row = 1:4+(13-4), column = 6:11))
+pfig6
 dev.off()
 ```
 
@@ -1420,7 +1454,7 @@ dev.off()
 ## 6. Compensation of HLA presentation bias in haplotypes
 
 Populations included into the analysis
-```{r}
+```{r TableS4}
 haplotypes <- fread("data/haplotypes.tsv") %>% 
   filter(Frequency > 0.01)
 
@@ -1455,7 +1489,7 @@ go.dist <- go.enr.all %>%
 ```
 
 Distance between alleles within frequent haplotypes
-```{r}
+```{r Fig7}
 haplotypes.a <- haplotypes %>% 
   select(Population, Frequency, MHC.1 = HLA.A, MHC.2 = HLA.B) %>%
   rbind(haplotypes %>% 
@@ -1521,7 +1555,7 @@ data.pred.flurry <- fread("mhcflurry_output/mhcflurry_human_proteome_pred.csv") 
 ```
 
 HLE(D)Ps
-```{r}
+```{r FigSN1a}
 data.pred.full.flurry <- data.pred.flurry %>%
   mutate(hla = gsub("[\\*\\:]", "", best_allele),
          uniprot.id = str_split_fixed(sequence_name, "[\\| ]", 3)[,2]) %>%
@@ -1566,7 +1600,7 @@ pfigsn1a <- data.pred.sel.s.flurry %>%
 ```
 
 Protein length bias of HLE(D)Ps
-```{r}
+```{r FigSN2}
 data.pred.sel.s.len.flurry <- data.pred.sel.s.flurry %>%
   filter(hla %in% hla_incl) %>%
   group_by(hla, sel, protein.len.q) %>%
@@ -1638,11 +1672,17 @@ pfigsn1b <- go.enr.1.flurry %>%
         axis.text.y = element_text(family = "mono", size = 8))
 ```
 
-```{r FigSN1.pdf}
+```{r FigSN1, fig.width=14, fig.height=14}
+pfigsn1 <- ggdraw() +
+  draw_plot(pfigsn1a, x = 0, y = 0, width = .42, height = 1) +
+  draw_plot(pfigsn1b, x = .43, y = -.1, width = .57, height = 1.1) +
+  draw_plot_label(label = c("A", "B"), size = 11,
+                  x = c(0, .42), y = c(1, 1))
+
+pfigsn1
+
 pdf("figures/FigSN1.pdf", height = 14, width = 14)
-figure <- multi_panel_figure(columns = 14, rows = 12)
-(figure %<>% fill_panel(pfigsn1a, row = 1:11, column = 1:6))
-(figure %<>% fill_panel(pfigsn1b, row = 1:12, column = 7:14))
+pfigsn1
 dev.off()
 ```
 
