@@ -1549,18 +1549,23 @@ dev.off()
 ### Independent validation of HLA presentation biases using MHCflurry and DAVID software tools
 
 ```{r}
-data.pred.flurry <- fread("mhcflurry_output/mhcflurry_human_proteome_pred.csv") %>% 
-  mutate(ligand.len = nchar(peptide)) %>%
-  filter(presentation_score > 0.5)
+#data.pred.flurry <- fread("mhcflurry_output/mhcflurry_human_proteome_pred.csv") %>% 
+#data.pred.flurry <- data.pred.flurry %>% 
+#  mutate(ligand.len = nchar(peptide)) %>%
+#  filter(presentation_score > 0.5)
 ```
 
 HLE(D)Ps
 ```{r FigSN1a}
-data.pred.full.flurry <- data.pred.flurry %>%
-  mutate(hla = gsub("[\\*\\:]", "", best_allele),
-         uniprot.id = str_split_fixed(sequence_name, "[\\| ]", 3)[,2]) %>%
-  group_by(uniprot.id, hla, ligand.len) %>%
-  summarise(count = n()) 
+#data.pred.full.flurry <- data.pred.flurry %>%
+#  mutate(hla = gsub("[\\*\\:]", "", best_allele),
+#         uniprot.id = str_split_fixed(sequence_name, "[\\| ]", 3)[,2]) %>%
+#  group_by(uniprot.id, hla, ligand.len) %>%
+#  summarise(count = n()) 
+
+#fwrite(data.pred.full.flurry, "data/human_proteome_mhcflurry_summary.txt", sep = '\t')
+
+data.pred.full.flurry <- fread("data/human_proteome_mhcflurry_summary.txt")
 
 data.pred.sel.s.flurry <- data.pred.full.flurry %>%
   filter(ligand.len == 9) %>%
