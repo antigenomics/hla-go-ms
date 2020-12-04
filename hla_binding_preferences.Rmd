@@ -23,13 +23,12 @@ library(latex2exp)
 library(ggdist)
 library(ggpubr)
 library(ComplexHeatmap)
-select = dplyr::select
-
+library(rstatix)
 library(ontologySimilarity) 
 library(gridExtra)
 library(cowplot)
 rename = dplyr::rename
-library(rstatix)
+select = dplyr::select
 ```
 
 ## 1. HLA ligand-enriched genes and their GO analysis
@@ -58,7 +57,6 @@ data.pred.full %>%
                                      "HLA-A0101", "HLA-A0301", 
                                      "HLA-B0702", "HLA-B2705",
                                      "HLA-B0801", "HLA-B5701", # HIV
-                                     #"HLA-B2709", "HLA-B3801", # 
                                      "HLA-C0702", "HLA-C1502", # SARS
                                      "HLA-C0202", "HLA-C0801")) -> data.pred.sel
 
@@ -360,7 +358,7 @@ data.pred.sel.s.aafreq <- data.pred.sel.s %>%
             sem = sd(freq)/sqrt(n())) %>% 
   ungroup()
 
-hla.anchor.res <- tibble(hla = c(rep("HLA-A0201", 2), "HLA-A1101", "HLA-B0702", "HLA-B2705", rep("HLA-C0202", 4), rep("HLA-C1507", 3)), aminoacid = c("L", "V", "K", "P", "R", "F", "Y", "A", "L", "L", "A", "V"), anchor = 1)
+hla.anchor.res <- tibble(hla = c(rep("HLA-A0201", 2), "HLA-A1101", "HLA-B0702", "HLA-B2705", rep("HLA-C0202", 3), rep("HLA-C1502", 3)), aminoacid = c("L", "V", "K", "P", "R", "F", "Y", "L", "L", "I", "V"), anchor = 1)
 
 data.pred.sel.s.aafreq <-  data.pred.sel.s.aafreq %>% 
   merge(hla.anchor.res, all = T) %>%
@@ -818,7 +816,7 @@ dev.off()
 ### Explore protein length bias for 93 HLA alleles
 
 ```{r FigS6abc}
-data.pred.sel.s.all <- fread("zcat data/genes_enr_extended.tsv.gz")
+data.pred.sel.s.all <- fread("data/genes_enr_extended.tsv")
 
 data.pred.sel.s.all.len <- data.pred.sel.s.all %>%
   filter(hla %in% hla_extended) %>%
