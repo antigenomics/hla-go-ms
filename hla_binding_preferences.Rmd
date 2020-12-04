@@ -816,7 +816,7 @@ dev.off()
 ### Explore protein length bias for 93 HLA alleles
 
 ```{r FigS6abc}
-data.pred.sel.s.all <- fread("data/genes_enr_extended.tsv")
+data.pred.sel.s.all <- data.pred.sel.s.all <- fread("zcat data/genes_enr_extended.tsv.gz")
 
 data.pred.sel.s.all.len <- data.pred.sel.s.all %>%
   filter(hla %in% hla_extended) %>%
