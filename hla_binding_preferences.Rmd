@@ -1697,7 +1697,7 @@ go.top.1.flurry <- go.enr.1.flurry %>%
   .$Term.ID %>% unique
 
 pfigsn1b <- go.enr.1.flurry %>%
-  filter(!(hla %in% excl_for_now),
+  filter(#!(hla %in% excl_for_now),
          Term.ID %in% go.top.1.flurry) %>%
   mutate(Term = trunc_str(Term, 4),
          direction = ifelse(sel > 0, "enriched", "depleted")) %>%
