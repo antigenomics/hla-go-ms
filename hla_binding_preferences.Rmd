@@ -1,10 +1,17 @@
 ---
-title: "HLA presentation preferences"
+title: "Self and foreing protein presentation preferences of HLA alleles"
 output: html_document
 ---
 
+Setup
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+if (!startsWith(as.character(getRversion()), "3.6")) {
+  stop("R v3.6 required in order to execute this Rmd file")
+}
+
 library(tidyverse)
 library(broom)
 library(data.table)
@@ -27,25 +34,46 @@ library(rstatix)
 library(ontologySimilarity) 
 library(gridExtra)
 library(cowplot)
-rename = dplyr::rename
-select = dplyr::select
+
+get_os <- function(){
+  sysinf <- Sys.info()
+  if (!is.null(sysinf)){
+  os <- sysinf['sysname']
+  if (os == 'Darwin')
+    os <- "osx"
+  } else { ## mystery machine
+    os <- .Platform$OS.type
+    if (grepl("^darwin", R.version$os))
+      os <- "osx"
+    if (grepl("linux-gnu", R.version$os))
+      os <- "linux"
+  }
+  tolower(os)
+}
+
+if (get_os() == "osx") {
+  read_gz <- function(x) fread(paste("gzcat", x))
+} else {
+  read_gz <- function(x) fread(paste("zcat", x))
+}
+
+rename <- dplyr::rename
+select <- dplyr::select
 ```
 
 ## 1. HLA ligand-enriched genes and their GO analysis
 
 ### Load and preprocess binding predictions
 
-Read in netMHCpan binders (WB & SB)
-
->TODO cleanup
+Read in netMHCpan binders
 
 ```{r}
-data.pred.full <- fread("zcat data/human_proteome_netmhcpan_summary.txt.gz")
+data.pred.full <- read_gz("data/human_proteome_netmhcpan_summary.txt.gz")
 
 data.pred.full %>%
   group_by(hla, ligand.len) %>%
   summarize(count = sum(count)) %>%
-  arrange(-count) %>%# View() 
+  arrange(-count) %>%
   head()
 ```
 
@@ -540,16 +568,20 @@ pfig4a <- data.seph.ann.sel %>%
   mutate(hla.orig = paste0(hla.orig, "-assoc. GO"),
          p = DE / total.DE, psd = sqrt(p * (1 - p) / total.DE)) %>%
   arrange(p) %>%
+  group_by(hla.orig, Term) %>%
+  mutate(p.norm = p / mean(p), psd.norm = psd / mean(p), delta = abs(p[1] - p[2])) %>%
   #filter(Ont == "CC", Term == "ribosome" | Term == "membrane" | Term == "nucleosome") %>%
-  ggplot(aes(x = fct_reorder(Term, DE / total.DE), 
-             y = p, color = hla)) +
-  geom_pointrange(aes(ymin = p - psd, ymax = p + psd), width = 0.2) +
+  ggplot(aes(x = fct_reorder(Term, P.DE), 
+             y = p.norm, color = hla)) +
+  geom_pointrange(aes(ymin = p.norm - psd.norm, ymax = p.norm + psd.norm), width = 0.2) +
+  geom_point(aes(y = p.norm, size = DE), width = 0.2) +
   geom_line(aes(group = hla)) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "grey30", size = 0.5) +
   scale_color_manual(name = "Experimental\n ligandome", values = c("#dfc27d", "#80cdc1")) +
-  facet_wrap(~hla.orig, scales = "free") +
-  xlab("") + ylab("Fraction of presented proteins") +
+  facet_wrap(~hla.orig, scales = "free") + scale_size("Number of\nproteins", breaks = c(100, 500, 1000)) +
+  xlab("") + ylab("Fraction of presented proteins / \n mean for two HLAs") +
   theme_pubr() +
-  theme(legend.position = c(0.1, 0.7),
+  theme(legend.position = "right", #c(0.1, 0.7),
         axis.text.x = element_text(angle = -45, vjust = 0.5, hjust = 0))
 pfig4a
 ```
@@ -740,7 +772,7 @@ pfig4b <- data.seph.ann.len %>%
          max.fold.len = factor(paste0(max.fold.len, "-mer"), levels = c("9-mer", "10-mer", "11-mer", "12-mer"))) %>%
   #filter(ligand.len %in% c(10, 11), ligand.len.orig %in% c(10, 11)) %>%
   ggplot(aes(x = DE.orig / total.DE.orig, y = DE / total.DE)) +
-  #geom_smooth(method = "lm", color = "black", alpha = 0.7, linetype = "dashed") +
+  geom_smooth(method = "lm", se = F, color = "grey30", linetype = "dashed", size = 0.5) +
   geom_point(aes(color = max.fold.len %>% as.factor), size = 3) +
   geom_text_repel(aes(label = Term), seed = 42, force = 5,
                   #nudge_x = 0.4, 
@@ -816,7 +848,7 @@ dev.off()
 ### Explore protein length bias for 93 HLA alleles
 
 ```{r FigS6abc}
-data.pred.sel.s.all <- data.pred.sel.s.all <- fread("zcat data/genes_enr_extended.tsv.gz")
+data.pred.sel.s.all <- read_gz("data/genes_enr_extended.tsv.gz")
 
 data.pred.sel.s.all.len <- data.pred.sel.s.all %>%
   filter(hla %in% hla_extended) %>%
@@ -1469,7 +1501,9 @@ ggtexttable(pst4, rows = NULL,
 
 pst4
 ```
+
 Compute distances between GO enrichment profiles for all pairs of HLA alleles
+
 ```{r}
 go.dist <- go.enr.all %>%
   ungroup %>%
@@ -1487,6 +1521,7 @@ go.dist <- go.enr.all %>%
 ```
 
 Distance between alleles within frequent haplotypes
+
 ```{r Fig7}
 haplotypes.a <- haplotypes %>% 
   select(Population, Frequency, MHC.1 = HLA.A, MHC.2 = HLA.B) %>%
@@ -1517,23 +1552,27 @@ haplotypes.dist <- haplotypes.a %>%
   bind_rows(haplotypes.control) %>% 
   merge(go.dist, all.x = T) %>% 
   mutate(genes = paste(substr(MHC.1,1,5), substr(MHC.2,1,5), sep = "/")) %>% distinct(MHC.1, MHC.2, .keep_all = T) %>% 
-  mutate(haplotype = ifelse(haplotype == 1, "Haplotype", "Control") %>% factor(levels = c("Haplotype", "Control"))) 
+  mutate(haplotype = ifelse(haplotype == 1, "Haplotype", "Control") %>% 
+           factor(levels = c("Haplotype", "Control"))) 
 
 stat.test <- haplotypes.dist %>%
   group_by(genes) %>%
   wilcox_test(dist.l ~ haplotype) %>%
   adjust_pvalue(method = "bonferroni") %>%
   add_significance() %>% 
-  add_y_position()
+  add_y_position(y.trans = function(x) x + 0.005)
 
 pfig7 <- haplotypes.dist %>% 
+  mutate(haplotype = factor(haplotype, levels = c("Control", "Haplotype"))) %>%
   ggplot(aes(x = haplotype, y = dist.l)) +
   facet_wrap(~genes) +
-  geom_quasirandom(size = .5, color = "grey50") +
-  geom_boxplot(alpha = 0, outlier.shape = NaN) +
-  stat_summary(fun.y="median", geom='point', shape = 95, size = 15, color = 'red') +
-  stat_pvalue_manual(stat.test, label = "p.adj.signif", tip.length = 0.01) +
-  theme_bw() + 
+  #geom_quasirandom(size = .5, color = "grey50") +
+  geom_violin(aes(fill = haplotype), adjust = 1, trim = F) +
+  geom_boxplot(fill = "white", width = 0.3) +
+  #stat_summary(fun.y="median", geom='point', shape = 95, size = 15, color = 'red') +
+  stat_pvalue_manual(stat.test, label = "p.adj.signif") +
+  scale_fill_manual(guide = F, values = c("#878787", "#d6604d")) +
+  theme_pubclean() +
   xlab("") + ylab("Distance between GO enrichment profiles")
 
 pfig7
@@ -1554,6 +1593,7 @@ dev.off()
 ```
 
 HLE(D)Ps
+
 ```{r FigSN1a}
 #data.pred.full.flurry <- data.pred.flurry %>%
 #  mutate(hla = gsub("[\\*\\:]", "", best_allele),
@@ -1687,5 +1727,11 @@ pfigsn1
 pdf("figures/FigSN1.pdf", height = 14, width = 14)
 pfigsn1
 dev.off()
+```
+
+---
+
+```{r}
+print("Done")
 ```
 
